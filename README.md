@@ -92,14 +92,26 @@ SAYU_BUNDLE_ID=dev.example.Sayu ./build.sh
 4. `PlistBuddy` で `Info.plist` のプレースホルダ（`$(EXECUTABLE_NAME)` / `$(PRODUCT_BUNDLE_IDENTIFIER)`）を実値に置換して配置
 5. アドホック署名（`codesign --force --sign -`）+ `Sayu.entitlements` を適用
 
+## インストール
+
+ビルド済みの DMG をリポジトリに同梱している。GitHub から直接ダウンロードしてインストール可能:
+
+1. リポジトリの [`build/Sayu.dmg`](build/Sayu.dmg) を **Download** から取得
+2. DMG を開いて `Sayu.app` を `Applications` にドラッグ
+3. `open /Applications/Sayu.app` で起動
+
+アドホック署名のため、初回起動時に Gatekeeper の警告が出る。
+**設定 > プライバシーとセキュリティ** の下部に「`Sayu` がブロックされました」と表示されるので、「このまま開く」を選択する。
+
+自分でビルドする場合は [ビルド](#ビルド) を参照。
+
 ## 初回セットアップ
 
-1. `INSTALL=1 ./build.sh` で `/Applications/Sayu.app` を配置
-2. `open /Applications/Sayu.app` で起動
-3. アクセシビリティ権限要求ダイアログ → 「システム設定を開く」
-4. **設定 > プライバシーとセキュリティ > アクセシビリティ** で `Sayu` を **ON**
-5. Sayu が `PermissionWatcher` で権限を検知し、再起動アラートを表示 → 「再起動」を押す
-6. メニューバーに地球儀アイコンが表示されれば成功
+1. `Sayu.app` を起動
+2. アクセシビリティ権限要求ダイアログ → 「システム設定を開く」
+3. **設定 > プライバシーとセキュリティ > アクセシビリティ** で `Sayu` を **ON**
+4. Sayu が `PermissionWatcher` で権限を検知し、再起動アラートを表示 → 「再起動」を押す
+5. メニューバーに地球儀アイコンが表示されれば成功
 
 ログイン時の自動起動はメニュー > **ログイン時に起動** で切替（`SMAppService.mainApp`）。
 連携設定は **設定 > 一般 > ログイン項目** からも確認できる。
