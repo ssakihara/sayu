@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *Sources/Sayu/*.swift) cd \"$CLAUDE_PROJECT_DIR\" && swift package plugin --allow-writing-to-package-directory swiftformat Sources/ ;; esac; exit 0",
+            "timeout": 90,
+            "statusMessage": "SwiftFormat"
+          },
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *Sources/Sayu/*.swift) cd \"$CLAUDE_PROJECT_DIR\" && swift package plugin --allow-writing-to-package-directory swiftlint lint Sources/ ;; esac; exit 0",
+            "timeout": 90,
+            "statusMessage": "SwiftLint"
+          }
+        ]
+      }
+    ]
+  }
+}
