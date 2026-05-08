@@ -14,6 +14,12 @@ final class KeyRemapper {
     /// 20ms は合成イベントのスケジューリング遅延を考慮した安全側の閾値。
     private static let minimumAlonePressDuration: TimeInterval = 0.02
 
+    /// 直前の Cmd-up からこの時間以内に発生した Cmd-down は、合成イベントによる
+    /// modifier 状態のフリッカー（例: 日本語 IME での Cmd+V 後の Cmd 再アサート）と
+    /// 見なす。人間が物理キーを離して再度押すには通常 80ms 以上かかるため、
+    /// 50ms はフリッカーと意図的なダブルタップを区別できる安全な閾値。
+    private static let commandFlickerWindow: TimeInterval = 0.05
+
     private let settings: Settings
 
     private var eventTap: CFMachPort?
@@ -23,6 +29,7 @@ final class KeyRemapper {
     private var commandDownAt: Date?
     private var commandDownIsLeft = false
     private var otherKeyPressedWhileCommand = false
+    private var lastCommandUpAt: Date?
 
     init(settings: Settings = .shared) {
         self.settings = settings
@@ -33,6 +40,7 @@ final class KeyRemapper {
 
         let mask = (1 << CGEventType.flagsChanged.rawValue)
                  | (1 << CGEventType.keyDown.rawValue)
+                 | (1 << CGEventType.keyUp.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else {
@@ -85,8 +93,14 @@ final class KeyRemapper {
             }
             return Unmanaged.passUnretained(event)
 
-        case .keyDown:
-            if lastFlags.contains(.maskCommand) {
+        case .keyDown, .keyUp:
+            // Cmd を押している最中に他キーの up/down が発生したら単独押しではない。
+            // event.flags を直接参照することで、flagsChanged の処理順序や
+            // lastFlags のタイミングずれに依存せず判定できる。
+            // keyDown が IME 等に消費されるケースに備え、Cmd 修飾子付きの keyUp
+            // でも同様にフラグを立てる（V 等のキー離上は Cmd 押下状態のため flags
+            // に maskCommand が残っており検出可能）。
+            if event.flags.contains(.maskCommand) {
                 otherKeyPressedWhileCommand = true
             }
             return Unmanaged.passUnretained(event)
@@ -125,15 +139,26 @@ final class KeyRemapper {
                     // この分岐に再度入らず nowDown ブランチで全状態が再設定される。
                     commandDownAt = nil
                 } else {
-                    commandDownAt = Date()
+                    // 直前 Cmd-up 直後の down はフリッカー（合成イベントによる
+                    // modifier 状態の瞬断）の可能性があるため、その場合は
+                    // otherKeyPressedWhileCommand をリセットしない。
+                    let now = Date()
+                    let isFlickerAfterUp = lastCommandUpAt.map {
+                        now.timeIntervalSince($0) < Self.commandFlickerWindow
+                    } ?? false
+
+                    commandDownAt = now
                     commandDownIsLeft = isLeft
-                    otherKeyPressedWhileCommand = false
+                    if !isFlickerAfterUp {
+                        otherKeyPressedWhileCommand = false
+                    }
                 }
             } else if nowUp {
+                let now = Date()
                 if !isSynthetic,
                    let downAt = commandDownAt,
                    !otherKeyPressedWhileCommand {
-                    let elapsed = Date().timeIntervalSince(downAt)
+                    let elapsed = now.timeIntervalSince(downAt)
                     if elapsed >= Self.minimumAlonePressDuration,
                        elapsed < settings.aloneThreshold {
                         let assignment = commandDownIsLeft
@@ -145,6 +170,9 @@ final class KeyRemapper {
                     }
                 }
                 commandDownAt = nil
+                if !isSynthetic {
+                    lastCommandUpAt = now
+                }
             }
         }
 
