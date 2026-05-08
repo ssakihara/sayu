@@ -8,6 +8,12 @@ final class KeyRemapper {
         static let rightCommand: Int64 = 54
     }
 
+    /// 単独押しと判定する押下時間の下限（秒）。
+    /// 人間のキーストロークは概ね 50ms 以上かかるのに対し、これを下回る押下→離上は
+    /// Raycast などが合成した Cmd+V のような偽イベントの可能性が高い。
+    /// 20ms は合成イベントのスケジューリング遅延を考慮した安全側の閾値。
+    private static let minimumAlonePressDuration: TimeInterval = 0.02
+
     private let settings: Settings
 
     private var eventTap: CFMachPort?
@@ -107,20 +113,38 @@ final class KeyRemapper {
             let nowUp = !flags.contains(.maskCommand)
                      && lastFlags.contains(.maskCommand)
 
+            // 他プロセスが合成した Cmd イベント（Raycast の Cmd+V ペースト等）は
+            // 物理キー押下と区別できないと誤発火するため、発生元 PID を確認する。
+            // 実ハードウェア入力は PID = 0 で届く。
+            let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
+            let isSynthetic = sourcePID != 0
+
             if nowDown {
-                commandDownAt = Date()
-                commandDownIsLeft = isLeft
-                otherKeyPressedWhileCommand = false
-            } else if nowUp,
-                      let downAt = commandDownAt,
-                      !otherKeyPressedWhileCommand,
-                      Date().timeIntervalSince(downAt) < settings.aloneThreshold {
-                let assignment = commandDownIsLeft
-                    ? settings.leftAssignment
-                    : settings.rightAssignment
-                if let target = assignment.keyCode {
-                    postKey(target)
+                if isSynthetic {
+                    // 合成 down は単独押し検出の対象外。後続で物理 down が来た場合は
+                    // この分岐に再度入らず nowDown ブランチで全状態が再設定される。
+                    commandDownAt = nil
+                } else {
+                    commandDownAt = Date()
+                    commandDownIsLeft = isLeft
+                    otherKeyPressedWhileCommand = false
                 }
+            } else if nowUp {
+                if !isSynthetic,
+                   let downAt = commandDownAt,
+                   !otherKeyPressedWhileCommand {
+                    let elapsed = Date().timeIntervalSince(downAt)
+                    if elapsed >= Self.minimumAlonePressDuration,
+                       elapsed < settings.aloneThreshold {
+                        let assignment = commandDownIsLeft
+                            ? settings.leftAssignment
+                            : settings.rightAssignment
+                        if let target = assignment.keyCode {
+                            postKey(target)
+                        }
+                    }
+                }
+                commandDownAt = nil
             }
         }
 
