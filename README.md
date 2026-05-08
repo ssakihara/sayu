@@ -17,8 +17,8 @@ macOS のメニューバー常駐アプリ。左右の Command キーの**単独
 ## 必要要件
 
 - macOS 13.0 以降
-- Apple Silicon (arm64) ※ `build.sh` は arm64 専用ビルド
-- Swift 5.9+ の `swiftc`（Xcode または Xcode Command Line Tools に同梱）
+- Apple Silicon (arm64) ※ Plugin は arm64 専用ビルド
+- Swift 5.9+ （Xcode または Xcode Command Line Tools に同梱）
 
 ## アーキテクチャ
 
@@ -37,7 +37,9 @@ sayu/
 │   └── Sayu.entitlements            # com.apple.security.app-sandbox = false
 ├── tools/
 │   └── generate-icon.swift          # SF Symbol → 1024x1024 PNG レンダリング
-├── build.sh                         # swiftc ベースのビルド（Xcode プロジェクト不要）
+├── Plugins/
+│   └── BundleAppCommand/Plugin.swift # `swift package bundle-app` コマンド本体
+├── Package.swift                    # SwiftPM マニフェスト (本体ターゲット + Plugin + lint/format)
 └── README.md
 ```
 
@@ -68,28 +70,72 @@ sayu/
 
 ## ビルド
 
-`build.sh` が `swiftc` で直接ビルドして `build/Sayu.app` を組み立てる（Xcode プロジェクト不要）。
+SwiftPM ネイティブの2段階構成。`swift build` で Sayu をコンパイルし、続けて
+Command Plugin `bundle-app` で .app バンドル組立・アイコン生成・署名を行う。
 
 ```bash
-# ビルドのみ → build/Sayu.app
-./build.sh
+# 1. Sayu をコンパイル → .build/arm64-apple-macosx/release/Sayu
+swift build -c release --arch arm64
 
-# /Applications にもインストール
-INSTALL=1 ./build.sh
+# 2. .app バンドル組立 → build/Sayu.app
+swift package --allow-writing-to-package-directory bundle-app
 
-# DMG も生成 → build/Sayu.dmg
-DMG=1 ./build.sh
+# /Applications にインストール (フラグ追加が必要)
+swift package \
+    --allow-writing-to-package-directory \
+    --allow-writing-to-directory /Applications \
+    bundle-app --install
 
-# Bundle ID を上書き（既定: dev.ssakihara.Sayu）
-SAYU_BUNDLE_ID=dev.example.Sayu ./build.sh
+# Bundle ID 上書き（既定: dev.ssakihara.Sayu）
+SAYU_BUNDLE_ID=dev.example.Sayu \
+    swift package --allow-writing-to-package-directory bundle-app
 ```
 
-`build.sh` の主な処理:
+> [!TIP]
+> コマンドが長いので shell alias を設定すると便利:
+>
+> ```bash
+> # ~/.zshrc 等に追記
+> alias sayu-build='swift build -c release --arch arm64 \
+>   && swift package --allow-writing-to-package-directory bundle-app'
+> alias sayu-install='swift build -c release --arch arm64 \
+>   && swift package \
+>        --allow-writing-to-package-directory \
+>        --allow-writing-to-directory /Applications \
+>        bundle-app --install'
+> ```
+
+### 設計上の制約
+
+- **`swift build` を Plugin から呼べない**: Plugin 実行中の swift-package が
+  SwiftPM の build lock を握っているため再帰呼び出しがデッドロックする。
+  したがって `swift build` を呼び出し側で先に実行する2段構成。
+- **`/Applications` への書き込みは追加フラグが必要**: Plugin sandbox が
+  パッケージ外への書き込みをデフォルトで拒否する。`--allow-writing-to-directory /Applications` を渡す。
+- **DMG 生成は Plugin 不可**: hdiutil が sandbox 内で device アクセス
+  できないため、Plugin から呼ぶと「装置が構成されていません」で失敗する。
+  下記の DMG 節を参照して直接コマンドで生成する。
+
+### DMG 生成
+
+```bash
+# build/Sayu.app が存在する前提
+mkdir -p build/dmg-stage \
+  && cp -R build/Sayu.app build/dmg-stage/ \
+  && ln -sfn /Applications build/dmg-stage/Applications \
+  && hdiutil create -volname Sayu \
+       -srcfolder build/dmg-stage \
+       -ov -format UDZO \
+       build/Sayu.dmg \
+  && rm -rf build/dmg-stage
+```
+
+### Plugin の主な処理
 
 1. `swift tools/generate-icon.swift build/icon-source.png` でアイコン PNG をレンダリング
 2. `sips` でリサイズして `iconutil` から `AppIcon.icns` を生成
-3. `swiftc -O -target arm64-apple-macos13.0` で `Sources/Sayu/*.swift` を一括ビルド
-4. `PlistBuddy` で `Info.plist` のプレースホルダ（`$(EXECUTABLE_NAME)` / `$(PRODUCT_BUNDLE_IDENTIFIER)`）を実値に置換して配置
+3. `.build/arm64-apple-macosx/release/Sayu` を `.app/Contents/MacOS/` にコピー
+4. `PlistBuddy` で `Info.plist` のプレースホルダ（`$(EXECUTABLE_NAME)` / `$(PRODUCT_BUNDLE_IDENTIFIER)`）を実値に置換
 5. アドホック署名（`codesign --force --sign -`）+ `Sayu.entitlements` を適用
 
 ## インストール
@@ -123,12 +169,39 @@ SAYU_BUNDLE_ID=dev.example.Sayu ./build.sh
 $EDITOR Sources/Sayu/KeyRemapper.swift
 
 # 再ビルド + /Applications を更新
-INSTALL=1 ./build.sh
+swift build -c release --arch arm64 \
+  && swift package \
+       --allow-writing-to-package-directory \
+       --allow-writing-to-directory /Applications \
+       bundle-app --install
 
 # 既存プロセスを終了して再起動
 pkill -x Sayu || true
 open /Applications/Sayu.app
 ```
+
+### Lint / Format
+
+`Package.swift` で SwiftLint と SwiftFormat を SwiftPM Plugin として導入している。
+
+```bash
+# 依存解決（初回のみ）
+swift package resolve
+
+# Lint（SwiftLint 0.63+）
+swift package plugin --allow-writing-to-package-directory swiftlint lint Sources/
+
+# Lint 自動修正（autocorrect 可能なルールのみ）
+swift package plugin --allow-writing-to-package-directory swiftlint --fix Sources/
+
+# Format チェックのみ
+swift package plugin --allow-writing-to-package-directory swiftformat --lint Sources/
+
+# Format 適用
+swift package plugin --allow-writing-to-package-directory swiftformat Sources/
+```
+
+ルールカスタマイズが必要なら `.swiftlint.yml` / `.swiftformat` をリポジトリ直下に配置する（未配置時はそれぞれのデフォルトルール）。
 
 > [!NOTE]
 > アクセシビリティ権限は **バンドルパス + 実行ファイルの署名識別子** で記録される。
@@ -169,7 +242,7 @@ log stream --predicate 'process == "Sayu"' --info
 
 - App Sandbox を必須とする Mac App Store 配布は**不可**（CGEventTap が App Sandbox 下では動かない）
 - Developer ID 署名 + `notarytool` での公証で外部配布可能
-- 現在の `build.sh` はアドホック署名のため、ローカル実行限定。配布時は `codesign` の引数を Developer ID 証明書に差し替えて再ビルドする
+- 現在の `bundle-app` Plugin はアドホック署名のため、ローカル実行限定。配布時は Plugin 内 `codesign` 呼び出しを Developer ID 証明書に差し替えて再ビルドする
 
 ## ライセンス
 
