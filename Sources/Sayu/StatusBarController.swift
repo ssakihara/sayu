@@ -58,7 +58,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         } else {
             statusItem.button?.title = "左右!"
         }
-        statusItem.button?.toolTip = "Sayu — アクセシビリティ権限が必要です"
+        statusItem.button?.toolTip = "Sayu — アクセシビリティ / 入力監視の権限が必要です"
         rebuildMenu()
     }
 
@@ -91,7 +91,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         if permissionRequired {
             let item = NSMenuItem(
-                title: "アクセシビリティ権限を許可…",
+                title: "必要な権限を許可…",
                 action: #selector(requestPermission),
                 keyEquivalent: ""
             )

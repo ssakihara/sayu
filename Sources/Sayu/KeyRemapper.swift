@@ -2,37 +2,46 @@ import AppKit
 import CoreGraphics
 
 /// 左右の Command キーの単独押しを検出し、`Settings` で指定されたキーを発火する。
+///
+/// 検出ロジックは https://github.com/iMasanari/cmd-eikana の方式に揃えてある:
+///   - modifier-down 時の keyCode を保持
+///   - modifier-up 時、保持していた keyCode と一致すれば「単独押し」として発火
+///   - その間に他キー入力・マウス操作が一度でも発生したら保持中の keyCode を nil
+///     にして発火条件を破棄する
+///
+/// 押下時間の閾値判定は持たない。「Cmd-down から Cmd-up までの間に他の入力が
+/// 一切無いか」だけで単独押し判定する。
+///
+/// CGEventTap で keyDown/keyUp を取得するには macOS Catalina 以降では
+/// 「入力監視」権限が必要なため、Sayu はその権限がある前提で動く（無いと
+/// keyDown/keyUp が届かず Cmd+V 等で誤発火する）。さらに上位フックに
+/// 消費される経路の保険として、NSEvent global+local monitor でも併監視する。
 final class KeyRemapper {
     private enum KeyCode {
-        static let leftCommand: Int64 = 55
-        static let rightCommand: Int64 = 54
+        static let leftCommand: CGKeyCode = 55
+        static let rightCommand: CGKeyCode = 54
     }
-
-    /// 単独押しと判定する押下時間の下限（秒）。
-    /// 人間のキーストロークは概ね 50ms 以上かかるのに対し、これを下回る押下→離上は
-    /// Raycast などが合成した Cmd+V のような偽イベントの可能性が高い。
-    /// 20ms は合成イベントのスケジューリング遅延を考慮した安全側の閾値。
-    private static let minimumAlonePressDuration: TimeInterval = 0.02
-
-    /// 直前の Cmd-up からこの時間以内に発生した Cmd-down は、合成イベントによる
-    /// modifier 状態のフリッカー（例: 日本語 IME での Cmd+V 後の Cmd 再アサート）と
-    /// 見なす。人間が物理キーを離して再度押すには通常 80ms 以上かかるため、
-    /// 50ms はフリッカーと意図的なダブルタップを区別できる安全な閾値。
-    private static let commandFlickerWindow: TimeInterval = 0.05
 
     private let settings: Settings
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var globalEventMonitor: Any?
+    private var localEventMonitor: Any?
 
-    private var lastFlags: CGEventFlags = []
-    private var commandDownAt: Date?
-    private var commandDownIsLeft = false
-    private var otherKeyPressedWhileCommand = false
-    private var lastCommandUpAt: Date?
+    /// 最後に modifier-down を観測した keyCode。次の modifier-up が同じ keyCode
+    /// で来れば単独押しと判定する。他のキー入力・マウス操作・合成 Cmd-down が
+    /// 発生したら nil にリセットされる。
+    private var lastModifierKeyCode: CGKeyCode?
 
     init(settings: Settings = .shared) {
         self.settings = settings
+    }
+
+    deinit {
+        // インスタンス破棄時に明示的に stop() を呼んでいない経路に備え、
+        // NSEvent monitor の解放を保証する。
+        stop()
     }
 
     func start() {
@@ -69,6 +78,28 @@ final class KeyRemapper {
 
         eventTap = tap
         runLoopSource = source
+
+        startAuxiliaryMonitors()
+    }
+
+    /// 他キー入力・マウス・スクロール操作を NSEvent global+local monitor 経由で
+    /// 監視する。CGEventTap だけでは Raycast 等の上位フックで keyDown が消費される
+    /// 環境でフォールバックが効くようにする保険。
+    private func startAuxiliaryMonitors() {
+        let mask: NSEvent.EventTypeMask = [
+            .leftMouseDown, .leftMouseUp,
+            .rightMouseDown, .rightMouseUp,
+            .otherMouseDown, .otherMouseUp,
+            .scrollWheel,
+            .keyDown, .keyUp,
+        ]
+        globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: mask) { [weak self] _ in
+            self?.lastModifierKeyCode = nil
+        }
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: mask) { [weak self] event in
+            self?.lastModifierKeyCode = nil
+            return event
+        }
     }
 
     func stop() {
@@ -80,6 +111,15 @@ final class KeyRemapper {
         }
         eventTap = nil
         runLoopSource = nil
+
+        if let monitor = globalEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = localEventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        globalEventMonitor = nil
+        localEventMonitor = nil
     }
 
     private func handle(
@@ -94,20 +134,8 @@ final class KeyRemapper {
             return Unmanaged.passUnretained(event)
 
         case .keyDown, .keyUp:
-            // Cmd を押している最中に他キーの up/down が発生したら単独押しではない。
-            //
-            // 検出条件は OR で 2 つ:
-            //   (a) commandDownAt != nil
-            //       — 物理 Cmd-down が flagsChanged で確定済みの窓内
-            //   (b) event.flags.contains(.maskCommand)
-            //       — flagsChanged より先に keyDown/keyUp が届くレアケース用の保険
-            //
-            // ただし Raycast 等の上位フックが Cmd+V の V を消費するケースでは
-            // どちらの条件も満たされず取りこぼす。その経路は Settings.aloneThreshold
-            // を「チョン押しのみが収まる短い値」に絞ることで時間軸側から弾く。
-            if commandDownAt != nil || event.flags.contains(.maskCommand) {
-                otherKeyPressedWhileCommand = true
-            }
+            // どんなキー入力が発生しても単独押しではなくなる。
+            lastModifierKeyCode = nil
             return Unmanaged.passUnretained(event)
 
         case .flagsChanged:
@@ -120,70 +148,45 @@ final class KeyRemapper {
     }
 
     private func handleFlagsChanged(event: CGEvent) {
-        let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        let flags = event.flags
-
+        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
         let isLeft = keyCode == KeyCode.leftCommand
         let isRight = keyCode == KeyCode.rightCommand
 
-        if isLeft || isRight {
-            let nowDown = flags.contains(.maskCommand)
-                && !lastFlags.contains(.maskCommand)
-            let nowUp = !flags.contains(.maskCommand)
-                && lastFlags.contains(.maskCommand)
-
-            // 他プロセスが合成した Cmd イベント（Raycast の Cmd+V ペースト等）は
-            // 物理キー押下と区別できないと誤発火するため、発生元 PID を確認する。
-            // 実ハードウェア入力は PID = 0 で届く。
-            let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
-            let isSynthetic = sourcePID != 0
-
-            if nowDown {
-                if isSynthetic {
-                    // 合成 down は単独押し検出の対象外。後続で物理 down が来た場合は
-                    // この分岐に再度入らず nowDown ブランチで全状態が再設定される。
-                    commandDownAt = nil
-                } else {
-                    // 直前 Cmd-up 直後の down はフリッカー（合成イベントによる
-                    // modifier 状態の瞬断）の可能性があるため、その場合は
-                    // otherKeyPressedWhileCommand をリセットしない。
-                    let now = Date()
-                    let isFlickerAfterUp = lastCommandUpAt.map {
-                        now.timeIntervalSince($0) < Self.commandFlickerWindow
-                    } ?? false
-
-                    commandDownAt = now
-                    commandDownIsLeft = isLeft
-                    if !isFlickerAfterUp {
-                        otherKeyPressedWhileCommand = false
-                    }
-                }
-            } else if nowUp {
-                let now = Date()
-                if !isSynthetic,
-                   let downAt = commandDownAt,
-                   !otherKeyPressedWhileCommand
-                {
-                    let elapsed = now.timeIntervalSince(downAt)
-                    if elapsed >= Self.minimumAlonePressDuration,
-                       elapsed < settings.aloneThreshold
-                    {
-                        let assignment = commandDownIsLeft
-                            ? settings.leftAssignment
-                            : settings.rightAssignment
-                        if let target = assignment.keyCode {
-                            postKey(target)
-                        }
-                    }
-                }
-                commandDownAt = nil
-                if !isSynthetic {
-                    lastCommandUpAt = now
-                }
-            }
+        guard isLeft || isRight else {
+            // Shift / Option / Control / Fn など他 modifier の変化も
+            // 「他キーの入力」とみなして単独押し判定を破棄する。
+            lastModifierKeyCode = nil
+            return
         }
 
-        lastFlags = flags
+        // Raycast 等が合成した Cmd イベント（CGEventPost 由来）は実ハードウェア
+        // 入力と区別するため発生元 PID を確認する。物理入力は PID = 0。
+        let sourcePID = event.getIntegerValueField(.eventSourceUnixProcessID)
+        let isSynthetic = sourcePID != 0
+
+        // event.flags の Cmd ビット状態で down / up を判定する。
+        // (modifier-down: maskCommand あり / modifier-up: maskCommand なし)
+        let isDown = event.flags.contains(.maskCommand)
+
+        if isDown {
+            if isSynthetic {
+                // 合成 Cmd-down は単独押し検出の対象外。物理 down が改めて来れば
+                // そこで lastModifierKeyCode が正しい値で再設定される。
+                lastModifierKeyCode = nil
+            } else {
+                lastModifierKeyCode = keyCode
+            }
+            return
+        }
+
+        // modifier-up
+        if !isSynthetic, lastModifierKeyCode == keyCode {
+            let assignment = isLeft ? settings.leftAssignment : settings.rightAssignment
+            if let target = assignment.keyCode {
+                postKey(target)
+            }
+        }
+        lastModifierKeyCode = nil
     }
 
     private func postKey(_ keyCode: CGKeyCode) {

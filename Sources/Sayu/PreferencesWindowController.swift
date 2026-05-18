@@ -1,12 +1,10 @@
 import AppKit
 
 /// 環境設定ウィンドウ。
-/// 単独押し判定の閾値・左右⌘の割り当てキーを編集できる。
+/// 左右⌘の割り当てキーを編集できる。
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private let settings: Settings
 
-    private let thresholdSlider = NSSlider()
-    private let thresholdValueLabel = NSTextField(labelWithString: "")
     private let leftPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let rightPopup = NSPopUpButton(frame: .zero, pullsDown: false)
 
@@ -14,7 +12,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         self.settings = settings
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 220),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 160),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -46,18 +44,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private func buildLayout() {
         guard let contentView = window?.contentView else { return }
 
-        thresholdSlider.minValue = Settings.thresholdRange.lowerBound
-        thresholdSlider.maxValue = Settings.thresholdRange.upperBound
-        thresholdSlider.isContinuous = true
-        thresholdSlider.target = self
-        thresholdSlider.action = #selector(thresholdChanged(_:))
-        thresholdSlider.setContentHuggingPriority(.defaultLow, for: .horizontal)
-
-        thresholdValueLabel.alignment = .right
-        thresholdValueLabel.widthAnchor
-            .constraint(greaterThanOrEqualToConstant: 64)
-            .isActive = true
-
         for key in AssignableKey.allCases {
             leftPopup.addItem(withTitle: key.displayName)
             leftPopup.lastItem?.representedObject = key
@@ -69,18 +55,13 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         rightPopup.target = self
         rightPopup.action = #selector(rightChanged(_:))
 
-        let thresholdRow = horizontalRow(views: [
-            label("単独押し判定:"),
-            thresholdSlider,
-            thresholdValueLabel,
-        ])
         let leftRow = horizontalRow(views: [label("左 ⌘:"), leftPopup])
         let rightRow = horizontalRow(views: [label("右 ⌘:"), rightPopup])
         let hint = NSTextField(labelWithString: "変更は即時に反映されます。")
         hint.textColor = .secondaryLabelColor
         hint.font = NSFont.preferredFont(forTextStyle: .footnote)
 
-        let stack = NSStackView(views: [thresholdRow, leftRow, rightRow, hint])
+        let stack = NSStackView(views: [leftRow, rightRow, hint])
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 16
@@ -93,13 +74,10 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             stack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             stack.topAnchor.constraint(equalTo: contentView.topAnchor),
             stack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            thresholdRow.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -48),
         ])
     }
 
     private func loadCurrentValues() {
-        thresholdSlider.doubleValue = settings.aloneThreshold
-        updateThresholdLabel()
         select(popup: leftPopup, key: settings.leftAssignment)
         select(popup: rightPopup, key: settings.rightAssignment)
     }
@@ -111,10 +89,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
                 return
             }
         }
-    }
-
-    private func updateThresholdLabel() {
-        thresholdValueLabel.stringValue = String(format: "%.2f 秒", thresholdSlider.doubleValue)
     }
 
     private func label(_ text: String) -> NSTextField {
@@ -129,11 +103,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         row.spacing = 8
         row.alignment = .centerY
         return row
-    }
-
-    @objc private func thresholdChanged(_ sender: NSSlider) {
-        settings.aloneThreshold = sender.doubleValue
-        updateThresholdLabel()
     }
 
     @objc private func leftChanged(_ sender: NSPopUpButton) {
