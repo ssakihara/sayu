@@ -3,7 +3,7 @@ import CoreGraphics
 
 /// 左右の Command キーの単独押しを検出し、`Settings` で指定されたキーを発火する。
 ///
-/// 検出ロジックは https://github.com/iMasanari/cmd-eikana の方式に揃えてある:
+/// 検出ロジック:
 ///   - modifier-down 時の keyCode を保持
 ///   - modifier-up 時、保持していた keyCode と一致すれば「単独押し」として発火
 ///   - その間に他キー入力・マウス操作が一度でも発生したら保持中の keyCode を nil

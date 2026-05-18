@@ -8,11 +8,21 @@ macOS のメニューバー常駐アプリ。左右の Command キーの**単独
 
 ## 機能
 
-- 単独押し判定の閾値（`0.1` 〜 `1.0` 秒）を環境設定で変更可能
 - 左右それぞれの発火キーを `英数 / かな / Esc / Tab / Return / 無効` から選択
 - ログイン時の自動起動（`SMAppService.mainApp`）をメニューから切替
-- アクセシビリティ権限のポーリング監視と、付与後の自動再起動
+- 必要な権限（アクセシビリティ / 入力監視）のポーリング監視と、付与後の自動再起動
+- 権限不足時はメニューバーに `!` を表示し、アラートから該当のシステム設定ペインを順に開いてユーザーをガイド
 - メニューバーアイコンは SF Symbol "globe"（テンプレート画像なのでライト/ダークに自動追従）
+
+## 判定ロジック
+
+**押下時間の閾値判定は持たない**。
+
+- modifier-down 時点の keyCode を保持
+- modifier-up 時、保持していた keyCode と一致すれば「単独押し」として発火
+- その間に他キー入力（keyDown / keyUp）・マウス操作・スクロールが一度でも発生したら保持中の keyCode を nil にして発火条件を破棄
+
+つまり「Cmd-down から Cmd-up までの間に他の入力が一切無い」ことだけを条件に判定する。Cmd を押した時間がいくら長くても短くても、他の入力が混じれば発火しない。
 
 ## 必要要件
 
@@ -24,14 +34,15 @@ macOS のメニューバー常駐アプリ。左右の Command キーの**単独
 
 ```
 sayu/
-├── Sources/Sayu/                    # アプリ本体（AppKit, ServiceManagement, ApplicationServices）
-│   ├── AppDelegate.swift            # @main, 起動シーケンス, 権限要求, 再起動制御
-│   ├── KeyRemapper.swift            # CGEventTap でキー監視, 単独押し検出と発火
+├── Sources/Sayu/                    # アプリ本体（AppKit, ServiceManagement, ApplicationServices, IOKit.hid）
+│   ├── AppDelegate.swift            # @main, 起動シーケンス, 権限案内アラート, 再起動制御
+│   ├── KeyRemapper.swift            # CGEventTap + NSEvent monitor で単独押し検出と発火
 │   ├── StatusBarController.swift    # メニューバー UI（NSStatusItem + NSMenu）
 │   ├── PreferencesWindowController.swift  # 環境設定ウィンドウ（AppKit 直書き）
 │   ├── Settings.swift               # UserDefaults 永続化 + NSLock キャッシュ
 │   ├── LoginItemManager.swift       # SMAppService.mainApp の登録/解除
-│   └── PermissionWatcher.swift      # AXIsProcessTrusted() のポーリング監視
+│   ├── Permissions.swift            # アクセシビリティ / 入力監視権限のチェック・要求
+│   └── PermissionWatcher.swift      # 両権限の付与状況をポーリングし、状態変化を通知
 ├── Resources/
 │   ├── Info.plist                   # LSUIElement=YES で Dock 非表示
 │   └── Sayu.entitlements            # com.apple.security.app-sandbox = false
@@ -47,24 +58,25 @@ sayu/
 
 | ファイル | 責務 |
 |---|---|
-| `AppDelegate.swift` | プロセス起動・`StatusBarController` 構築・アクセシビリティ権限要求・権限付与検知時の再起動 |
-| `KeyRemapper.swift` | `cgSessionEventTap` で `flagsChanged` / `keyDown` を購読。⌘ down→up の経過時間を計測し、閾値内かつ他キー未押下なら `CGEvent` で対象キーを送出 |
+| `AppDelegate.swift` | プロセス起動・`StatusBarController` 構築・権限案内アラートとシステム設定ペインへの誘導・権限付与検知時の自動再起動 |
+| `KeyRemapper.swift` | `cgSessionEventTap` で `flagsChanged` / `keyDown` / `keyUp` を購読、NSEvent global+local monitor でマウス・スクロール・キーも併監視。modifier-down 時の keyCode を保持し、その間に他イベントが一度でも発生したら nil リセット、一致した modifier-up でのみ発火 |
 | `StatusBarController.swift` | `NSStatusItem` の生成、メニュー構築、ログイン項目トグル、再起動・終了アクションのディスパッチ |
-| `PreferencesWindowController.swift` | NSSlider / NSPopUpButton で閾値と左右割り当てを編集。値変更は `Settings` に即時反映 |
+| `PreferencesWindowController.swift` | NSPopUpButton で左右⌘の割り当てを編集。値変更は `Settings` に即時反映 |
 | `Settings.swift` | `UserDefaults` 永続化。CGEvent タップは別スレッドから読むため、内部で `NSLock` 保護のキャッシュを保持 |
 | `LoginItemManager.swift` | macOS 13+ の `SMAppService.mainApp.register() / unregister()` を薄くラップ |
-| `PermissionWatcher.swift` | macOS は権限付与の通知 API を持たないため、`AXIsProcessTrusted()` を 1.5 秒間隔でポーリング |
+| `Permissions.swift` | アクセシビリティ (`AXIsProcessTrustedWithOptions`) と入力監視 (`IOHIDCheckAccess` / `IOHIDRequestAccess`) のチェック・要求、システム設定ペインの URL オープン |
+| `PermissionWatcher.swift` | macOS は権限付与の通知 API を持たないため両権限の状態を 1.5 秒間隔でポーリングし、状態変化のたびに購読者へ通知 |
 
 ### 単独押し判定の流れ（`KeyRemapper`）
 
-1. `flagsChanged` で ⌘ down を検出 → 押下時刻 (`commandDownAt`) と左右 (`commandDownIsLeft`) を保存
-2. ⌘ 押下中に `keyDown` が来たら `otherKeyPressedWhileCommand = true` で抑止フラグを立てる
-3. ⌘ up を検出した時、
-   - 経過時間 < `Settings.aloneThreshold`
-   - かつ `otherKeyPressedWhileCommand == false`
-
-   なら、`Settings.leftAssignment` / `rightAssignment` に応じた仮想キーコードを `CGEvent` で送出
+1. `flagsChanged` で左右⌘の modifier-down を検出 → `lastModifierKeyCode` にその keyCode を保存
+2. その間に届く任意の `keyDown` / `keyUp` / マウスイベント / 他 modifier 変化で `lastModifierKeyCode = nil`（発火条件を破棄）
+3. 左右⌘の modifier-up を検出した時、`lastModifierKeyCode` が一致していれば `Settings.leftAssignment` / `rightAssignment` に応じた仮想キーコードを `CGEvent` で送出
 4. `tapDisabledByTimeout` / `tapDisabledByUserInput` を受けたら自動で `tapEnable` し直す
+
+押下時間の上限・下限は持たない。「Cmd-down から Cmd-up までの間に他の入力が一切無いか」だけを見る。CGEventTap で keyDown/keyUp が上位フックに消費される環境（Raycast 等）への保険として NSEvent global+local monitor 経由でも同じ条件を監視している。
+
+合成イベント（`CGEventPost` 由来）は `eventSourceUnixProcessID != 0` で物理入力と区別し、合成 Cmd-down は単独押し検出の対象外にする。
 
 仮想キーコード参考: `JIS Eisu = 0x66`, `JIS Kana = 0x68`, `Esc = 0x35`, `Tab = 0x30`, `Return = 0x24`
 
@@ -153,14 +165,30 @@ mkdir -p build/dmg-stage \
 
 ## 初回セットアップ
 
+Sayu は左右⌘の単独押し検出に **2 種類の権限** が必要:
+
+- **アクセシビリティ**: `CGEvent.post` での発火と `flagsChanged` の監視に必要
+- **入力監視 (Input Monitoring)**: `CGEventTap` / `NSEvent.addGlobalMonitorForEvents` で `keyDown` / `keyUp` を取得するために必要（macOS Catalina 以降の OS 要件）
+
+どちらか欠けると単独押し検出が正しく動かない（特に入力監視が無いと Cmd+V のような他キー併用が単独押しと誤判定されて切り替わってしまう）。
+
+セットアップ手順:
+
 1. `Sayu.app` を起動
-2. アクセシビリティ権限要求ダイアログ → 「システム設定を開く」
-3. **設定 > プライバシーとセキュリティ > アクセシビリティ** で `Sayu` を **ON**
-4. Sayu が `PermissionWatcher` で権限を検知し、再起動アラートを表示 → 「再起動」を押す
-5. メニューバーに地球儀アイコンが表示されれば成功
+2. 起動直後に「Sayu に必要な権限を許可してください」アラートが表示される
+3. **「権限設定を開く」** を押すと、不足している権限のシステム設定ペインが順に開く
+4. 各画面で **Sayu のトグルを ON** にする
+   - アクセシビリティ → 入力監視 の順で自動的にバトンタッチされる
+5. 両方とも ON にすると Sayu が自動で検知し、再起動アラート → 「再起動」 で完了
+6. メニューバーに地球儀アイコンが表示されれば成功
+
+権限が外れた場合（バイナリ差し替え時など）はメニューバーのアイコンに `!` が付く。メニューから **「必要な権限を許可…」** を選ぶと再度アラートが表示される。
 
 ログイン時の自動起動はメニュー > **ログイン時に起動** で切替（`SMAppService.mainApp`）。
 連携設定は **設定 > 一般 > ログイン項目** からも確認できる。
+
+> [!NOTE]
+> macOS のセキュリティモデル上、これらの権限はユーザーがシステム設定で手動でトグルを ON にするしかない（管理者パスワードを入れて自動付与する API は存在しない）。Sayu はアラートとペイン誘導を最小限の操作で完了できるよう自動化している。
 
 ## 開発フロー
 
@@ -225,9 +253,10 @@ swift package plugin --allow-writing-to-package-directory swiftformat Sources/
 
 | 症状 | 対処 |
 |---|---|
-| メニューバーに何も出ない | `pkill -x Sayu` してから `open /Applications/Sayu.app` で再起動。アクセシビリティ権限の付与状況を確認 |
-| アイコンの右に `!` が表示される | アクセシビリティ権限が未付与。メニュー > 「アクセシビリティ権限を許可…」で再要求 |
-| ⌘ 単独押しで何も発火しない | 環境設定で割り当てが「無効」になっていないか / 単独押し閾値が短すぎないかを確認 |
+| メニューバーに何も出ない | `pkill -x Sayu` してから `open /Applications/Sayu.app` で再起動。アクセシビリティ・入力監視の両権限の付与状況を確認 |
+| アイコンの右に `!` が表示される | アクセシビリティまたは入力監視の権限が未付与。メニュー > 「必要な権限を許可…」で再要求 |
+| ⌘ + V のような他キー併用で勝手に英数/かなが切り替わる | **入力監視権限が未付与の典型症状**。`tccutil reset ListenEvent dev.ssakihara.Sayu` の後に Sayu を再起動し、アラートから入力監視を ON にする |
+| ⌘ 単独押しで何も発火しない | 環境設定で割り当てが「無効」になっていないか / 入力監視権限が ON かを確認 |
 | ⌘C / ⌘V が効かない | 通常時は素通し実装。別アプリ（Karabiner-Elements 等）の干渉を疑う |
 | 設定を変えても反映されない | `Settings` は即時反映。フロントアプリ側のショートカットキャッシュが原因のことがあるので Sayu とフロントアプリを再起動 |
 | ログイン項目に追加できない | システム設定 > 一般 > ログイン項目 から手動で追加 |
@@ -235,8 +264,14 @@ swift package plugin --allow-writing-to-package-directory swiftformat Sources/
 ログ確認:
 
 ```bash
-log stream --predicate 'process == "Sayu"' --info
+# 一般的なログ（NSLog による警告など）
+/usr/bin/log stream --predicate 'process == "Sayu"' --info
+
+# Sayu の os_log カテゴリだけに絞る
+/usr/bin/log stream --predicate 'subsystem == "io.github.ssakihara.sayu"' --style compact --info
 ```
+
+`log` は zsh の builtin なので、`/usr/bin/log` を明示的に呼ぶ必要がある。
 
 ## 配布
 
