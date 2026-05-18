@@ -39,8 +39,8 @@ final class KeyRemapper {
         guard eventTap == nil else { return }
 
         let mask = (1 << CGEventType.flagsChanged.rawValue)
-                 | (1 << CGEventType.keyDown.rawValue)
-                 | (1 << CGEventType.keyUp.rawValue)
+            | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.keyUp.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else {
@@ -57,7 +57,7 @@ final class KeyRemapper {
             options: .defaultTap,
             eventsOfInterest: CGEventMask(mask),
             callback: callback,
-            userInfo: Unmanaged.passUnretained(self).toOpaque(),
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
             NSLog("Sayu: failed to create event tap. Accessibility permission required.")
             return
@@ -84,7 +84,7 @@ final class KeyRemapper {
 
     private func handle(
         type: CGEventType,
-        event: CGEvent,
+        event: CGEvent
     ) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
@@ -95,12 +95,17 @@ final class KeyRemapper {
 
         case .keyDown, .keyUp:
             // Cmd を押している最中に他キーの up/down が発生したら単独押しではない。
-            // event.flags を直接参照することで、flagsChanged の処理順序や
-            // lastFlags のタイミングずれに依存せず判定できる。
-            // keyDown が IME 等に消費されるケースに備え、Cmd 修飾子付きの keyUp
-            // でも同様にフラグを立てる（V 等のキー離上は Cmd 押下状態のため flags
-            // に maskCommand が残っており検出可能）。
-            if event.flags.contains(.maskCommand) {
+            //
+            // 検出条件は OR で 2 つ:
+            //   (a) commandDownAt != nil
+            //       — 物理 Cmd-down が flagsChanged で確定済みの窓内
+            //   (b) event.flags.contains(.maskCommand)
+            //       — flagsChanged より先に keyDown/keyUp が届くレアケース用の保険
+            //
+            // ただし Raycast 等の上位フックが Cmd+V の V を消費するケースでは
+            // どちらの条件も満たされず取りこぼす。その経路は Settings.aloneThreshold
+            // を「チョン押しのみが収まる短い値」に絞ることで時間軸側から弾く。
+            if commandDownAt != nil || event.flags.contains(.maskCommand) {
                 otherKeyPressedWhileCommand = true
             }
             return Unmanaged.passUnretained(event)
@@ -123,9 +128,9 @@ final class KeyRemapper {
 
         if isLeft || isRight {
             let nowDown = flags.contains(.maskCommand)
-                       && !lastFlags.contains(.maskCommand)
+                && !lastFlags.contains(.maskCommand)
             let nowUp = !flags.contains(.maskCommand)
-                     && lastFlags.contains(.maskCommand)
+                && lastFlags.contains(.maskCommand)
 
             // 他プロセスが合成した Cmd イベント（Raycast の Cmd+V ペースト等）は
             // 物理キー押下と区別できないと誤発火するため、発生元 PID を確認する。
@@ -157,10 +162,12 @@ final class KeyRemapper {
                 let now = Date()
                 if !isSynthetic,
                    let downAt = commandDownAt,
-                   !otherKeyPressedWhileCommand {
+                   !otherKeyPressedWhileCommand
+                {
                     let elapsed = now.timeIntervalSince(downAt)
                     if elapsed >= Self.minimumAlonePressDuration,
-                       elapsed < settings.aloneThreshold {
+                       elapsed < settings.aloneThreshold
+                    {
                         let assignment = commandDownIsLeft
                             ? settings.leftAssignment
                             : settings.rightAssignment
@@ -184,12 +191,12 @@ final class KeyRemapper {
         let down = CGEvent(
             keyboardEventSource: source,
             virtualKey: keyCode,
-            keyDown: true,
+            keyDown: true
         )
         let up = CGEvent(
             keyboardEventSource: source,
             virtualKey: keyCode,
-            keyDown: false,
+            keyDown: false
         )
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)

@@ -17,7 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.run()
     }
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         statusBar = StatusBarController(
             onQuit: { NSApp.terminate(nil) },
             onRequestPermission: { [weak self] in
@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onRestart: { [weak self] in
                 self?.restart()
             },
-            loginItemManager: loginItemManager,
+            loginItemManager: loginItemManager
         )
 
         if requestAccessibilityPermission(prompt: true) {

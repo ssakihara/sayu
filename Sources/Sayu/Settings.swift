@@ -1,5 +1,5 @@
-import Foundation
 import CoreGraphics
+import Foundation
 
 /// 左右⌘ キーに割り当て可能なキー種別。
 enum AssignableKey: String, CaseIterable {
@@ -12,24 +12,24 @@ enum AssignableKey: String, CaseIterable {
 
     var displayName: String {
         switch self {
-        case .eisu: return "英数 (JIS Eisu)"
-        case .kana: return "かな (JIS Kana)"
-        case .escape: return "Esc"
-        case .tab: return "Tab"
-        case .return: return "Return"
-        case .disabled: return "無効"
+        case .eisu: "英数 (JIS Eisu)"
+        case .kana: "かな (JIS Kana)"
+        case .escape: "Esc"
+        case .tab: "Tab"
+        case .return: "Return"
+        case .disabled: "無効"
         }
     }
 
     /// 発火時に送出する仮想キーコード。`disabled` は nil。
     var keyCode: CGKeyCode? {
         switch self {
-        case .eisu: return 0x66
-        case .kana: return 0x68
-        case .escape: return 0x35
-        case .tab: return 0x30
-        case .return: return 0x24
-        case .disabled: return nil
+        case .eisu: 0x66
+        case .kana: 0x68
+        case .escape: 0x35
+        case .tab: 0x30
+        case .return: 0x24
+        case .disabled: nil
         }
     }
 }
@@ -43,8 +43,12 @@ final class Settings {
     static let shared = Settings()
 
     /// 単独押し判定の閾値（秒）の許容範囲。
-    static let thresholdRange: ClosedRange<TimeInterval> = 0.1...1.0
-    static let defaultThreshold: TimeInterval = 0.3
+    /// Cmd+V のような他キー併用時の Cmd 押下時間は実測 120ms 以上で始まる一方、
+    /// 意図的な単独押し（チョン押し）は 100ms 未満で完結する。CGEventTap が
+    /// 上位フックに V キーを消費されて単独押しと誤判定するのを避けるため、
+    /// 上限を 0.12 に絞り「100ms 程度のチョン押しのみ通す」運用に統一する。
+    static let thresholdRange: ClosedRange<TimeInterval> = 0.05 ... 0.12
+    static let defaultThreshold: TimeInterval = 0.1
 
     private enum Keys {
         static let aloneThreshold = "aloneThreshold"
@@ -63,9 +67,14 @@ final class Settings {
         self.defaults = defaults
 
         if defaults.object(forKey: Keys.aloneThreshold) != nil {
-            cachedThreshold = Self.thresholdRange.clamp(
-                defaults.double(forKey: Keys.aloneThreshold),
-            )
+            // 旧バージョンで保存された範囲外の値（最大 1.0s 等）が残っている場合、
+            // clamp した結果を書き戻して UI 表示と実値を一致させる。
+            let raw = defaults.double(forKey: Keys.aloneThreshold)
+            let clamped = Self.thresholdRange.clamp(raw)
+            cachedThreshold = clamped
+            if clamped != raw {
+                defaults.set(clamped, forKey: Keys.aloneThreshold)
+            }
         } else {
             cachedThreshold = Self.defaultThreshold
         }

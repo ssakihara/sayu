@@ -33,7 +33,7 @@ final class PermissionWatcher {
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
             if AXIsProcessTrusted() {
-                self.fire()
+                fire()
             }
         }
     }

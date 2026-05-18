@@ -23,7 +23,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         onRequestPermission: @escaping () -> Void,
         onOpenPreferences: @escaping () -> Void,
         onRestart: @escaping () -> Void,
-        loginItemManager: LoginItemManager,
+        loginItemManager: LoginItemManager
     ) {
         self.onQuit = onQuit
         self.onRequestPermission = onRequestPermission
@@ -67,11 +67,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private static func loadMenuBarImage() -> NSImage? {
         let config = NSImage.SymbolConfiguration(
             pointSize: Layout.symbolPointSize,
-            weight: .regular,
+            weight: .regular
         )
         let image = NSImage(
             systemSymbolName: "globe",
-            accessibilityDescription: "Sayu",
+            accessibilityDescription: "Sayu"
         )?.withSymbolConfiguration(config)
         image?.isTemplate = true
         return image
@@ -79,7 +79,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     // MARK: - NSMenuDelegate
 
-    func menuWillOpen(_ menu: NSMenu) {
+    func menuWillOpen(_: NSMenu) {
         rebuildMenu()
     }
 
@@ -93,7 +93,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             let item = NSMenuItem(
                 title: "アクセシビリティ権限を許可…",
                 action: #selector(requestPermission),
-                keyEquivalent: "",
+                keyEquivalent: ""
             )
             item.target = self
             menu.addItem(item)
@@ -103,7 +103,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let preferences = NSMenuItem(
             title: "環境設定…",
             action: #selector(openPreferences),
-            keyEquivalent: ",",
+            keyEquivalent: ","
         )
         preferences.target = self
         menu.addItem(preferences)
@@ -111,7 +111,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let loginItem = NSMenuItem(
             title: "ログイン時に起動",
             action: #selector(toggleLoginItem),
-            keyEquivalent: "",
+            keyEquivalent: ""
         )
         loginItem.target = self
         loginItem.state = loginItemManager.isEnabled ? .on : .off
@@ -122,7 +122,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let restart = NSMenuItem(
             title: "Sayu を再起動",
             action: #selector(restart),
-            keyEquivalent: "",
+            keyEquivalent: ""
         )
         restart.target = self
         menu.addItem(restart)
@@ -130,7 +130,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let quit = NSMenuItem(
             title: "Sayu を終了",
             action: #selector(quit),
-            keyEquivalent: "q",
+            keyEquivalent: "q"
         )
         quit.target = self
         menu.addItem(quit)
