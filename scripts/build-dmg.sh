@@ -38,7 +38,8 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 
 echo "==> Build"
-swift build -c release --arch arm64
+# Swift 6.4 以降の既定ビルドシステム（swiftbuild）は出力先が変わり bundle-app が見つけられないため native を明示する
+swift build -c release --arch arm64 --build-system native
 swift package --allow-writing-to-package-directory bundle-app
 
 if [[ -n "${VERSION:-}" ]]; then
