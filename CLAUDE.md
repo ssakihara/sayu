@@ -9,7 +9,7 @@ SwiftPM ＋自作 Command Plugin（`Plugins/BundleAppCommand`）で `.app` を�
 
 - Swift Tools 5.9 / ターゲット macOS 13.0+ / arm64
 - `CGEventTap` の `flagsChanged` で押下時間からの単独押しを判定
-- 配布形態は `build/Sayu.dmg`（リポジトリ同梱、ad-hoc 署名）
+- 配布形態は GitHub Releases の `Sayu-<version>.dmg`（Developer ID 署名 + 公証）と homebrew-tap の Cask（`brew install --cask ssakihara/tap/sayu`）
 
 ## ビルド・実行コマンド
 
@@ -20,7 +20,7 @@ SwiftPM ＋自作 Command Plugin（`Plugins/BundleAppCommand`）で `.app` を�
 | バイナリビルド | `swift build -c release --arch arm64` |
 | `.app` バンドル | `swift package --allow-writing-to-package-directory bundle-app` |
 | `/Applications` へインストール | `swift build -c release --arch arm64 && swift package --allow-writing-to-package-directory --allow-writing-to-directory /Applications bundle-app --install` |
-| DMG 生成 | プラグイン外で `hdiutil` を直接使う（README 参照）。plugin sandbox では device access 不可 |
+| リリース用 DMG 生成 | `TEAM_ID=<Team ID> NOTARY_PROFILE=sayu-notary scripts/build-dmg.sh`（ユーザーの Mac でのみ実行可。plugin sandbox では hdiutil 不可） |
 | Lint | `swift package plugin --allow-writing-to-package-directory swiftlint lint Sources/` |
 | Format（適用） | `swift package plugin --allow-writing-to-package-directory swiftformat Sources/` |
 | Format（チェックのみ） | `swift package plugin --allow-writing-to-package-directory swiftformat --lint Sources/` |
@@ -51,5 +51,5 @@ SwiftPM ＋自作 Command Plugin（`Plugins/BundleAppCommand`）で `.app` を�
 ## Git 運用
 
 - **コミットメッセージは日本語**。`feat:` `fix:` などの Conventional Commits プレフィックス + 日本語サマリ（`git log` 参照）。
-- **`build/Sayu.dmg` はリリース対象の変更（バージョン更新・ユーザーから見える挙動変更）が入ったときに再生成してコミットに含める**。内部リファクタのみの場合は再生成不要。
-- DMG 再生成は README 記載の `hdiutil` 手順をそのまま実行する。
+- **DMG はリポジトリにコミットしない**。リリースは README「リリース」節の手順（`scripts/build-dmg.sh` → `gh release create` → homebrew-tap の `Casks/sayu.rb` 更新）でユーザーが手動で行う。
+- リリース時は `Resources/Info.plist` の `CFBundleShortVersionString` を上げてからタグを切る。

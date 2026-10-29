@@ -1,6 +1,5 @@
 # Xcode
 build/*
-!build/Sayu.dmg
 DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
