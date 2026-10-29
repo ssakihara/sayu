@@ -130,17 +130,7 @@ SAYU_BUNDLE_ID=dev.example.Sayu \
 
 ### DMG 生成
 
-```bash
-# build/Sayu.app が存在する前提
-mkdir -p build/dmg-stage \
-  && cp -R build/Sayu.app build/dmg-stage/ \
-  && ln -sfn /Applications build/dmg-stage/Applications \
-  && hdiutil create -volname Sayu \
-       -srcfolder build/dmg-stage \
-       -ov -format UDZO \
-       build/Sayu.dmg \
-  && rm -rf build/dmg-stage
-```
+hdiutil は Plugin sandbox 内で動かないため、配布用 DMG は [リリース](#リリース) の `scripts/build-dmg.sh` で作る。
 
 ### Plugin の主な処理
 
@@ -148,18 +138,18 @@ mkdir -p build/dmg-stage \
 2. `sips` でリサイズして `iconutil` から `AppIcon.icns` を生成
 3. `.build/arm64-apple-macosx/release/Sayu` を `.app/Contents/MacOS/` にコピー
 4. `PlistBuddy` で `Info.plist` のプレースホルダ（`$(EXECUTABLE_NAME)` / `$(PRODUCT_BUNDLE_IDENTIFIER)`）を実値に置換
-5. アドホック署名（`codesign --force --sign -`）+ `Sayu.entitlements` を適用
+5. アドホック署名（`codesign --force --sign -`）+ `Sayu.entitlements` を適用（配布用は `scripts/build-dmg.sh` が Developer ID で署名し直す）
 
 ## インストール
 
-ビルド済みの DMG をリポジトリに同梱している。GitHub から直接ダウンロードしてインストール可能:
+Homebrew でインストールできる:
 
-1. リポジトリの [`build/Sayu.dmg`](build/Sayu.dmg) を **Download** から取得
-2. DMG を開いて `Sayu.app` を `Applications` にドラッグ
-3. `open /Applications/Sayu.app` で起動
+```bash
+brew install --cask ssakihara/tap/sayu
+```
 
-アドホック署名のため、初回起動時に Gatekeeper の警告が出る。
-**設定 > プライバシーとセキュリティ** の下部に「`Sayu` がブロックされました」と表示されるので、「このまま開く」を選択する。
+または [GitHub Releases](https://github.com/ssakihara/sayu/releases/latest) から `Sayu-<バージョン>.dmg` を取得し、`Sayu.app` を `Applications` にドラッグする。
+DMG は Developer ID 署名 + 公証済みなので Gatekeeper の警告なしで起動できる。
 
 自分でビルドする場合は [ビルド](#ビルド) を参照。
 
@@ -276,8 +266,29 @@ swift package plugin --allow-writing-to-package-directory swiftformat Sources/
 ## 配布
 
 - App Sandbox を必須とする Mac App Store 配布は**不可**（CGEventTap が App Sandbox 下では動かない）
-- Developer ID 署名 + `notarytool` での公証で外部配布可能
-- 現在の `bundle-app` Plugin はアドホック署名のため、ローカル実行限定。配布時は Plugin 内 `codesign` 呼び出しを Developer ID 証明書に差し替えて再ビルドする
+- GitHub Releases に Developer ID 署名 + 公証済みの DMG を置き、[homebrew-tap](https://github.com/ssakihara/homebrew-tap) の Cask から配布する
+
+## リリース
+
+公証用の認証情報を一度だけキーチェーンに保存する（App 用パスワードは appleid.apple.com で発行）。
+
+```bash
+xcrun notarytool store-credentials sayu-notary --apple-id <Apple ID> --team-id <Team ID> --password <App 用パスワード>
+```
+
+「Developer ID Application」証明書がキーチェーンに入っている状態で実行する。
+
+```bash
+TEAM_ID=<Team ID> NOTARY_PROFILE=sayu-notary scripts/build-dmg.sh
+```
+
+`build/release/Sayu-<バージョン>.dmg` ができ、最後に sha256 が表示される。バージョンは `Resources/Info.plist` の `CFBundleShortVersionString`（`VERSION=0.2.0` で上書き可）。
+
+1. `gh release create v<バージョン> build/release/Sayu-<バージョン>.dmg --generate-notes` で GitHub Releases に公開
+2. homebrew-tap の `Casks/sayu.rb` の `version` と `sha256` を更新してコミット
+
+> [!NOTE]
+> Developer ID 署名に切り替えると署名識別子が変わるため、ad-hoc 署名版から乗り換えた初回はアクセシビリティ / 入力監視の権限を付け直す必要がある。
 
 ## ライセンス
 
